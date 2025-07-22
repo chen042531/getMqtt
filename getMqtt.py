@@ -1,38 +1,43 @@
 import paho.mqtt.client as mqtt
+import threading
+import time
+import json
+from collections import defaultdict
 
-# 連線成功時的 callback
+imsi_count = defaultdict(int)
+lock = threading.Lock()
+
 def on_connect(client, userdata, flags, rc):
-    print("事件: on_connect")
-    client.subscribe("#")  # 訂閱所有主題
+    print("已連線")
+    client.subscribe("FiveGC/metric")  # 監聽你要的 topic
 
-# 斷線時的 callback
-def on_disconnect(client, userdata, rc):
-    print("事件: on_disconnect")
-
-# 收到訊息時的 callback
 def on_message(client, userdata, msg):
-    print("事件: on_message")
-    print(f"主題: {msg.topic}, 訊息: {msg.payload.decode()}")
+    try:
+        data = json.loads(msg.payload.decode())
+        imsi = data.get("imsi")
+        if imsi:
+            with lock:
+                imsi_count[imsi] += 1
+    except Exception as e:
+        print("解析失敗", e)
 
-# 訂閱成功時的 callback
-def on_subscribe(client, userdata, mid, granted_qos):
-    print("事件: on_subscribe")
-
-# 取消訂閱時的 callback
-def on_unsubscribe(client, userdata, mid):
-    print("事件: on_unsubscribe")
-
-# 發佈完成時的 callback
-def on_publish(client, userdata, mid):
-    print("事件: on_publish")
+def print_and_reset():
+    while True:
+        time.sleep(5)
+        with lock:
+            if imsi_count:
+                result = ', '.join([f"{imsi}:{count}" for imsi, count in imsi_count.items()])
+                print(result)
+                imsi_count.clear()
+            else:
+                print("這5秒沒有收到訊息")
 
 client = mqtt.Client()
 client.on_connect = on_connect
-client.on_disconnect = on_disconnect
 client.on_message = on_message
-client.on_subscribe = on_subscribe
-client.on_unsubscribe = on_unsubscribe
-client.on_publish = on_publish
 
 client.connect("10.1.153.187", 1883, 60)
+
+threading.Thread(target=print_and_reset, daemon=True).start()
+
 client.loop_forever()
