@@ -26,8 +26,8 @@ def print_and_reset():
         time.sleep(5)
         with lock:
             if imsi_count:
-                result = ', '.join([f"{imsi}:{count}" for imsi, count in imsi_count.items()])
-                print(result)
+                imsi_list = ', '.join(imsi_count.keys())
+                print(f"這5秒有{len(imsi_count)}個不同的imsi: {imsi_list}")
                 imsi_count.clear()
             else:
                 print("這5秒沒有收到訊息")

@@ -10,7 +10,7 @@ import (
 
 func main() {
 	// 設定各種事件的 callback
-	opts := mqtt.NewClientOptions().AddBroker("tcp://10.1.153..187:1883")
+	opts := mqtt.NewClientOptions().AddBroker("tcp://10.1.153.135:1883")
 	opts.SetClientID("go_mqtt_client")
 
 	// 連線成功
