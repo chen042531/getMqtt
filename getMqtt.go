@@ -1,50 +1,71 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"os"
+	"log"
+	"sync"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
+	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
 
-func main() {
-	// 設定各種事件的 callback
-	opts := mqtt.NewClientOptions().AddBroker("tcp://10.1.153.135:1883")
-	opts.SetClientID("go_mqtt_client")
+type MetricData struct {
+	Imsi string `json:"imsi"`
+}
 
-	// 連線成功
-	opts.OnConnect = func(c mqtt.Client) {
-		fmt.Println("事件: OnConnect")
-		if token := c.Subscribe("#", 0, nil); token.Wait() && token.Error() != nil {
-			fmt.Println("訂閱失敗:", token.Error())
-		}
+var (
+	imsiCount = make(map[string]int)
+	lock      sync.Mutex
+)
+
+func onConnect(client MQTT.Client) {
+	fmt.Println("已連線")
+	client.Subscribe("FiveGC/metric", 0, nil)
+}
+
+func onMessage(client MQTT.Client, msg MQTT.Message) {
+	var data MetricData
+	err := json.Unmarshal(msg.Payload(), &data)
+	if err != nil {
+		log.Printf("解析失敗: %v", err)
+		return
 	}
 
-	// 斷線
-	opts.OnConnectionLost = func(c mqtt.Client, err error) {
-		fmt.Println("事件: OnConnectionLost")
-		fmt.Println("錯誤:", err)
+	if data.Imsi != "" {
+		lock.Lock()
+		imsiCount[data.Imsi]++
+		lock.Unlock()
 	}
+}
 
-	// 收到訊息
-	messagePubHandler := func(client mqtt.Client, msg mqtt.Message) {
-		fmt.Println("事件: OnMessageReceived")
-		fmt.Printf("主題: %s, 訊息: %s\n", msg.Topic(), msg.Payload())
-	}
-
-	// 建立 client
-	client := mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		fmt.Println("連線失敗:", token.Error())
-		os.Exit(1)
-	}
-
-	// 設定收到訊息的 callback
-	client.AddRoute("#", messagePubHandler)
-
-	// 持續運作
+func printAndReset() {
 	for {
-		time.Sleep(1 * time.Second)
+		time.Sleep(15 * time.Second)
+		lock.Lock()
+		if len(imsiCount) > 0 {
+			fmt.Printf("這15秒有%d個不同的imsi\n", len(imsiCount))
+			imsiCount = make(map[string]int)
+		} else {
+			fmt.Println("這15秒沒有收到訊息")
+		}
+		lock.Unlock()
 	}
+}
+
+func main() {
+	opts := MQTT.NewClientOptions()
+	opts.AddBroker("tcp://10.1.153.167:1883")
+	opts.SetDefaultPublishHandler(onMessage)
+	opts.OnConnect = onConnect
+
+	client := MQTT.NewClient(opts)
+	if token := client.Connect(); token.Wait() && token.Error() != nil {
+		log.Fatal(token.Error())
+	}
+
+	go printAndReset()
+
+	// 保持程式運行
+	select {}
 }
