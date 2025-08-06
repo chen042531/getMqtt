@@ -55,7 +55,7 @@ func printAndReset() {
 
 func main() {
 	opts := MQTT.NewClientOptions()
-	opts.AddBroker("tcp://10.1.153.167:1883")
+	opts.AddBroker("tcp://10.1.153.161:1883")
 	opts.SetDefaultPublishHandler(onMessage)
 	opts.OnConnect = onConnect
 
