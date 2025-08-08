@@ -20,6 +20,7 @@ type MetricData struct {
 
 type PacketStats struct {
 	DestinationIP string
+	SourceIP      string
 	ImsiSet       map[string]bool
 	Count         int
 }
@@ -53,7 +54,7 @@ func listInterfaces() []pcap.Interface {
 
 func capturePacketsOnAny() {
 	// 使用 "any" 介面捕獲所有網路流量
-	handle, err := pcap.OpenLive("any", 1600, true, pcap.BlockForever)
+	handle, err := pcap.OpenLive("cali62ed833be43", 1600, true, pcap.BlockForever)
 	if err != nil {
 		log.Printf("無法打開 any 介面: %v", err)
 		log.Println("嘗試列出可用的網路介面...")
@@ -63,7 +64,8 @@ func capturePacketsOnAny() {
 	defer handle.Close()
 
 	// 設置過濾器，只捕獲發送到目標IP的MQTT流量（端口1883）
-	filter := fmt.Sprintf("tcp port 1883 and dst host %s", targetIP)
+	// filter := fmt.Sprintf("tcp port 1883 and dst host %s", targetIP)
+	filter := fmt.Sprintf("tcp port 1883")
 	err = handle.SetBPFFilter(filter)
 	if err != nil {
 		log.Fatal("設置BPF過濾器失敗:", err)
@@ -107,12 +109,12 @@ func processPacket(packet gopacket.Packet) {
 	}
 
 	// 檢查目標IP是否為目標IP
-	if ipLayer.DstIP.String() != targetIP {
-		if debugMode {
-			log.Printf("[any] 目標IP %s 不是監控目標 %s", ipLayer.DstIP.String(), targetIP)
-		}
-		return
-	}
+	// if ipLayer.DstIP.String() != targetIP {
+	// 	if debugMode {
+	// 		log.Printf("[any] 目標IP %s 不是監控目標 %s", ipLayer.DstIP.String(), targetIP)
+	// 	}
+	// 	return
+	// }
 
 	// 解析傳輸層
 	transportLayer := packet.TransportLayer()
@@ -140,6 +142,11 @@ func processPacket(packet gopacket.Packet) {
 		return
 	}
 
+	// 印出MQTT封包的基本信息
+	sourceIP := ipLayer.SrcIP.String()
+	destIP := ipLayer.DstIP.String()
+	fmt.Printf("[MQTT] %s -> %s:%d\n", sourceIP, destIP, tcpLayer.DstPort)
+
 	// 嘗試解析MQTT payload
 	payload := tcpLayer.Payload
 	if len(payload) == 0 {
@@ -165,11 +172,13 @@ func processPacket(packet gopacket.Packet) {
 		defer lock.Unlock()
 
 		destinationIP := ipLayer.DstIP.String()
+		sourceIP := ipLayer.SrcIP.String()
 
 		// 初始化该IP的统计
 		if ipStats[destinationIP] == nil {
 			ipStats[destinationIP] = &PacketStats{
 				DestinationIP: destinationIP,
+				SourceIP:      sourceIP,
 				ImsiSet:       make(map[string]bool),
 				Count:         0,
 			}
@@ -179,7 +188,7 @@ func processPacket(packet gopacket.Packet) {
 		ipStats[destinationIP].ImsiSet[data.Imsi] = true
 		ipStats[destinationIP].Count++
 
-		log.Printf("[any] 捕獲發送到 %s 的MQTT封包，IMSI: %s", destinationIP, data.Imsi)
+		fmt.Printf("[MQTT-IMSI] %s -> %s, IMSI: %s\n", sourceIP, destinationIP, data.Imsi)
 	}
 }
 
@@ -192,6 +201,7 @@ func printAndReset() {
 		for ip, stat := range ipStats {
 			stats[ip] = &PacketStats{
 				DestinationIP: stat.DestinationIP,
+				SourceIP:      stat.SourceIP,
 				ImsiSet:       make(map[string]bool),
 				Count:         stat.Count,
 			}
@@ -223,16 +233,15 @@ func printAndReset() {
 				}
 			}
 		} else {
-			fmt.Printf("\n[%s] 這%d秒沒有捕獲到發送到目標IP %s 的MQTT封包\n",
+			fmt.Printf("\n[%s] 這%d秒沒有捕獲到MQTT封包\n",
 				time.Now().Format("15:04:05"),
-				int(statsInterval.Seconds()),
-				targetIP)
+				int(statsInterval.Seconds()))
 		}
 	}
 }
 
 func main() {
-	fmt.Println("MQTT封包監控工具 (目標IP版本)")
+	fmt.Println("MQTT封包監控工具 (所有MQTT版本)")
 	fmt.Println("================================")
 
 	// 檢查是否為root權限
@@ -242,7 +251,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("開始監控發送到 %s 的MQTT封包...\n", targetIP)
+	fmt.Println("開始監控所有MQTT封包...")
 
 	// 啟動統計報告協程
 	go printAndReset()

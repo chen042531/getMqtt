@@ -1,0 +1,199 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"sort"
+	"sync"
+	"time"
+
+	MQTT "github.com/eclipse/paho.mqtt.golang"
+)
+
+type MetricData struct {
+	Imsi string `json:"imsi"`
+}
+
+var (
+	imsiCount      = make(map[string]int)
+	totalBytes     int64
+	messageCount   int64
+	messageLengths []int
+	maxLength      int
+	minLength      int
+	lock           sync.Mutex
+)
+
+func onConnect(client MQTT.Client) {
+	fmt.Println("已連線~ss")
+	client.Subscribe("FiveGC/metric", 0, onMessage)
+}
+
+func onMessage(client MQTT.Client, msg MQTT.Message) {
+	var data MetricData
+	err := json.Unmarshal(msg.Payload(), &data)
+	if err != nil {
+		log.Printf("解析失敗: %v", err)
+		return
+	}
+
+	lock.Lock()
+	// 統計字節長度
+	messageLength := len(msg.Payload())
+	totalBytes += int64(messageLength)
+	messageCount++
+	messageLengths = append(messageLengths, messageLength)
+
+	// 更新最大最小值
+	if messageCount == 1 {
+		maxLength = messageLength
+		minLength = messageLength
+	} else {
+		if messageLength > maxLength {
+			maxLength = messageLength
+		}
+		if messageLength < minLength {
+			minLength = messageLength
+		}
+	}
+
+	// 統計IMSI
+	if data.Imsi != "" {
+		imsiCount[data.Imsi]++
+	}
+	lock.Unlock()
+}
+
+func onMessage2(client MQTT.Client, msg MQTT.Message) {
+	var data MetricData
+	err := json.Unmarshal(msg.Payload(), &data)
+	if err != nil {
+		log.Printf("解析失敗: %v", err)
+		return
+	}
+
+	// lock.Lock()
+	// // 統計字節長度
+	// messageLength := len(msg.Payload())
+	// totalBytes += int64(messageLength)
+	// messageCount++
+	// messageLengths = append(messageLengths, messageLength)
+
+	// // 更新最大最小值
+	// if messageCount == 1 {
+	// 	maxLength = messageLength
+	// 	minLength = messageLength
+	// } else {
+	// 	if messageLength > maxLength {
+	// 		maxLength = messageLength
+	// 	}
+	// 	if messageLength < minLength {
+	// 		minLength = messageLength
+	// 	}
+	// }
+
+	// // 統計IMSI
+	// if data.Imsi != "" {
+	// 	imsiCount[data.Imsi]++
+	// }
+	// lock.Unlock()
+}
+
+// 計算四分位數
+func calculateQuartiles(lengths []int) (q1, q2, q3 float64) {
+	if len(lengths) == 0 {
+		return 0, 0, 0
+	}
+
+	sorted := make([]int, len(lengths))
+	copy(sorted, lengths)
+	sort.Ints(sorted)
+
+	n := len(sorted)
+
+	// Q2 (中位數)
+	if n%2 == 0 {
+		q2 = float64(sorted[n/2-1]+sorted[n/2]) / 2
+	} else {
+		q2 = float64(sorted[n/2])
+	}
+
+	// Q1 (第一四分位數)
+	mid := n / 2
+	if mid%2 == 0 {
+		q1 = float64(sorted[mid/2-1]+sorted[mid/2]) / 2
+	} else {
+		q1 = float64(sorted[mid/2])
+	}
+
+	// Q3 (第三四分位數)
+	if n%2 == 0 {
+		upperMid := mid
+		if upperMid%2 == 0 {
+			q3 = float64(sorted[mid+upperMid/2-1]+sorted[mid+upperMid/2]) / 2
+		} else {
+			q3 = float64(sorted[mid+upperMid/2])
+		}
+	} else {
+		upperMid := mid + 1
+		if upperMid%2 == 0 {
+			q3 = float64(sorted[mid+upperMid/2-1]+sorted[mid+upperMid/2]) / 2
+		} else {
+			q3 = float64(sorted[mid+upperMid/2])
+		}
+	}
+
+	return q1, q2, q3
+}
+
+func printAndReset() {
+	for {
+		time.Sleep(15 * time.Second)
+		lock.Lock()
+		if len(imsiCount) > 0 || messageCount > 0 {
+			fmt.Printf("這15秒統計:\n")
+			fmt.Printf("  - 不同IMSI數量: %d\n", len(imsiCount))
+			fmt.Printf("  - 總消息數量: %d\n", messageCount)
+			fmt.Printf("  - 總字節數: %d bytes\n", totalBytes)
+			if messageCount > 0 {
+				fmt.Printf("  - 平均字節數: %.2f bytes\n", float64(totalBytes)/float64(messageCount))
+				fmt.Printf("  - 最大字節數: %d bytes\n", maxLength)
+				fmt.Printf("  - 最小字節數: %d bytes\n", minLength)
+
+				// 計算四分位數
+				q1, q2, q3 := calculateQuartiles(messageLengths)
+				fmt.Printf("  - 四分位數 (Q1/Q2/Q3): %.2f / %.2f / %.2f bytes\n", q1, q2, q3)
+			}
+			fmt.Println()
+
+			// 重置統計數據
+			imsiCount = make(map[string]int)
+			totalBytes = 0
+			messageCount = 0
+			messageLengths = []int{}
+			maxLength = 0
+			minLength = 0
+		} else {
+			fmt.Println("這15秒沒有收到訊息")
+		}
+		lock.Unlock()
+	}
+}
+
+func main() {
+	opts := MQTT.NewClientOptions()
+	opts.AddBroker("tcp://10.1.153.188:1883")
+	opts.SetDefaultPublishHandler(onMessage2)
+	opts.OnConnect = onConnect
+
+	client := MQTT.NewClient(opts)
+	if token := client.Connect(); token.Wait() && token.Error() != nil {
+		log.Fatal(token.Error())
+	}
+
+	go printAndReset()
+
+	// 保持程式運行
+	select {}
+}
